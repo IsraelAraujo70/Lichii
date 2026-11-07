@@ -25,6 +25,7 @@
 #include "input_common/drivers/mouse.h"
 #include "input_common/drivers/touch_screen.h"
 #include "input_common/main.h"
+#include "video_core/nx2_perf.h"
 #include "yuzu_cmd/emu_window/emu_window_sdl3.h"
 #include "yuzu_cmd/yuzu_icon.h"
 
@@ -187,6 +188,18 @@ void EmuWindow_SDL3::ShowCursor(bool show_cursor) {
     }
 }
 
+void EmuWindow_SDL3::PublishDisplayRefresh() {
+    const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(render_window));
+    if (mode == nullptr) {
+        return;
+    }
+    const double hz = mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0
+                          ? static_cast<double>(mode->refresh_rate_numerator) /
+                                mode->refresh_rate_denominator
+                          : static_cast<double>(mode->refresh_rate);
+    VideoCommon::Nx2Perf::SetDisplayRefreshHz(hz);
+}
+
 void EmuWindow_SDL3::Fullscreen() {
     SDL_DisplayMode display_mode;
     switch (Settings::values.fullscreen_mode.GetValue()) {
@@ -231,6 +244,10 @@ void EmuWindow_SDL3::OnEvent(SDL_Event& event) {
     // Afterall we don't really expect the user to pay attention to the titlebar
     // while they're moving a lot of shit around...
     switch (event.type) {
+    case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+    case SDL_EVENT_WINDOW_SHOWN:
+        PublishDisplayRefresh();
+        return OnResize();
     case SDL_EVENT_WINDOW_RESIZED:
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_MAXIMIZED:

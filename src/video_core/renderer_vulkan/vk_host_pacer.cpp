@@ -51,6 +51,12 @@ std::optional<double> QueryRefreshPeriodNs() {
         mode.dmDisplayFrequency > 1) {
         return 1e9 / mode.dmDisplayFrequency;
     }
+#else
+    if (const long long hint =
+            VideoCommon::Nx2Perf::g_display_refresh_hint_ns.load(std::memory_order_relaxed);
+        hint > 0) {
+        return static_cast<double>(hint);
+    }
 #endif
     return std::nullopt;
 }

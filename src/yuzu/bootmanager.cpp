@@ -62,6 +62,7 @@
 #include "input_common/main.h"
 #include "qt_common/qt_common.h"
 #include "video_core/gpu.h"
+#include "video_core/nx2_perf.h"
 #include "video_core/renderer_base.h"
 #include "yuzu/bootmanager.h"
 #include "yuzu/main_window.h"
@@ -195,6 +196,10 @@ void GRenderWindow::OnFramebufferSizeChanged() {
     const u32 width = this->width() * pixel_ratio;
     const u32 height = this->height() * pixel_ratio;
     UpdateCurrentFramebufferLayout(width, height);
+    // The host frame pacer needs the display's refresh rate (Windows asks DWM itself).
+    if (const QScreen* const current = screen()) {
+        VideoCommon::Nx2Perf::SetDisplayRefreshHz(current->refreshRate());
+    }
 }
 
 void GRenderWindow::BackupGeometry() {
