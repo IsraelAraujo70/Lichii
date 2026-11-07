@@ -2265,7 +2265,14 @@ private:
             const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_EVERY");
             return value != nullptr ? (std::max)(u64{1}, static_cast<u64>(std::strtoull(value, nullptr, 10))) : u64{120};
         }();
-        if (directory == nullptr || (m_presents % every) != 1 % every || m_capture_pending->exchange(true)) {
+        // EDEN_NX2_FRAME_CAPTURE_FROM=<present>: no captures before that present (skips menus
+        // and loading, where full-resolution captures only slow the run down).
+        static const u64 from = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_FROM");
+            return value != nullptr ? static_cast<u64>(std::strtoull(value, nullptr, 10)) : u64{0};
+        }();
+        if (directory == nullptr || m_presents < from || (m_presents % every) != 1 % every ||
+            m_capture_pending->exchange(true)) {
             return;
         }
         // EDEN_NX2_FRAME_CAPTURE_SIZE=<w>x<h> (default 1280x720): capture size, e.g. 1920x1080
