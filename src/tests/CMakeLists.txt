@@ -90,6 +90,7 @@ add_executable(tests
     video_core/ampere_matrix.cpp
     video_core/spirv_software_matrix.cpp
     video_core/spirv_builtin_capabilities.cpp
+    video_core/spirv_min_max_denorms.cpp
     common/bit_field.cpp
     common/cityhash.cpp
     common/container_hash.cpp
