@@ -676,6 +676,17 @@ void PinCurrentThread(PinnedRole role) {
     }
     if (CPU_COUNT(&mask) != 0 && sched_setaffinity(0, sizeof(mask), &mask) != 0) {
         LOG_WARNING(Common, "Could not pin thread: {}", ::Common::GetLastErrorMsg());
+        // The thread keeps the mask it inherited (a GPU thread's single core, for a thread that
+        // one started) unless it is widened: fall back to every core read at startup. If the
+        // cpuset shrank since, the kernel keeps the intersection.
+        cpu_set_t all;
+        CPU_ZERO(&all);
+        for (const cpu_set_t& core : cores) {
+            CPU_OR(&all, &all, &core);
+        }
+        if (sched_setaffinity(0, sizeof(all), &all) != 0) {
+            LOG_WARNING(Common, "Could not unpin thread: {}", ::Common::GetLastErrorMsg());
+        }
     }
 #endif
 }

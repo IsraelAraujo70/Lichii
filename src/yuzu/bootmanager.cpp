@@ -196,9 +196,21 @@ void GRenderWindow::OnFramebufferSizeChanged() {
     const u32 width = this->width() * pixel_ratio;
     const u32 height = this->height() * pixel_ratio;
     UpdateCurrentFramebufferLayout(width, height);
-    // The host frame pacer needs the display's refresh rate (Windows asks DWM itself).
-    if (const QScreen* const current = screen()) {
-        VideoCommon::Nx2Perf::SetDisplayRefreshHz(current->refreshRate());
+    PublishDisplayRefresh();
+}
+
+void GRenderWindow::PublishDisplayRefresh() {
+    // The host frame pacer needs the display's refresh rate (Windows asks DWM itself). A mode
+    // change on the same screen (165 -> 60 Hz) arrives through QScreen::refreshRateChanged.
+    const QScreen* const current = screen();
+    VideoCommon::Nx2Perf::SetDisplayRefreshHz(current != nullptr ? current->refreshRate() : 0.0);
+    if (current != refresh_screen) {
+        QObject::disconnect(refresh_connection);
+        refresh_screen = current;
+        if (current != nullptr) {
+            refresh_connection = connect(current, &QScreen::refreshRateChanged, this,
+                                         [this] { PublishDisplayRefresh(); });
+        }
     }
 }
 

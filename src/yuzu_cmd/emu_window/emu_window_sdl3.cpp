@@ -191,6 +191,7 @@ void EmuWindow_SDL3::ShowCursor(bool show_cursor) {
 void EmuWindow_SDL3::PublishDisplayRefresh() {
     const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(render_window));
     if (mode == nullptr) {
+        VideoCommon::Nx2Perf::SetDisplayRefreshHz(0.0);
         return;
     }
     const double hz = mode->refresh_rate_numerator > 0 && mode->refresh_rate_denominator > 0
@@ -244,6 +245,9 @@ void EmuWindow_SDL3::OnEvent(SDL_Event& event) {
     // Afterall we don't really expect the user to pay attention to the titlebar
     // while they're moving a lot of shit around...
     switch (event.type) {
+    case SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED:
+        PublishDisplayRefresh();
+        return;
     case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
     case SDL_EVENT_WINDOW_SHOWN:
         PublishDisplayRefresh();

@@ -31,6 +31,7 @@ class QCamera;
 class QImageCapture;
 class QMediaCaptureSession;
 class QCloseEvent;
+class QScreen;
 class QFocusEvent;
 class QKeyEvent;
 class QMouseEvent;
@@ -129,6 +130,9 @@ public:
 
 public slots:
     void OnFramebufferSizeChanged();
+    /// Publishes the refresh rate of the screen this window is on to the host frame pacer, and
+    /// follows that screen's refresh changes.
+    void PublishDisplayRefresh();
 
 signals:
     /// Emitted when the window is closed
@@ -168,6 +172,8 @@ private:
     QImage screenshot_image;
 
     QByteArray geometry;
+    const QScreen* refresh_screen = nullptr;
+    QMetaObject::Connection refresh_connection;
 
     QWidget* child_widget = nullptr;
 
