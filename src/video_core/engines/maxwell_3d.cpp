@@ -1854,7 +1854,9 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     // read now flushes its whole device pages and remembers the split position; later reads of
     // those pages skip the drain while nothing sent since may write them
     // (GpuSplit::MayBeWrittenSince) and the query cache lists no report there. 10 also drains,
-    // reads again and logs differences.
+    // reads again and logs differences. 11 (experiment) keeps snapshots across compute and copy
+    // work, which ended ~77% of them in Ocarina's forest; 12 is 11 that also drains, re-reads and
+    // counts the reads only 11 let through that differ.
     const int snapshot_mode =
         VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_dma_snapshot, "EDEN_NX2_DMA_SNAPSHOT",
                                          9);
@@ -1875,13 +1877,21 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
             static u64 differences{};
             static u64 report_reads{};
             static std::array<u64, 4> miss_reasons{};
+            static u64 relaxed_hits{};
+            static u64 relaxed_differences{};
             const u64 first_page = *device >> 12;
             const u64 last_page = (*device + read_bytes - 1) >> 12;
+            // 11/12: compute and copy work does not end a snapshot (see the mode comment above).
+            const bool relaxed = snapshot_mode >= 11;
             bool hit = true;
+            bool relaxed_only = false;
             for (u64 page = first_page; page <= last_page && hit; ++page) {
                 const auto it = fs.dma_snapshots.find(page);
                 hit = it != fs.dma_snapshots.end() &&
-                      !split.MayBeWrittenSince(it->second, *device, read_bytes);
+                      !split.MayBeWrittenSince(it->second, *device, read_bytes, relaxed);
+                if (hit && relaxed && split.MayBeWrittenSince(it->second, *device, read_bytes)) {
+                    relaxed_only = true;
+                }
                 if (!hit) {
                     // No snapshot, compute/copy sent since, unranged writer sent since, noted write.
                     const u32 reason = it == fs.dma_snapshots.end()                   ? 0
@@ -1898,7 +1908,25 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
                 snap_words.resize(words);
                 if (hit) {
                     ++hits;
+                    relaxed_hits += relaxed_only ? 1 : 0;
                     memory_manager.ReadBlockUnsafe(source, snap_words.data(), read_bytes);
+                    if (snapshot_mode == 12 && relaxed_only) {
+                        split.Drain(VideoCommon::DrainSite::MacroDmaRead);
+                        flush_if_dirty();
+                        flush_queries(source, read_bytes);
+                        std::vector<u32> exact(words);
+                        memory_manager.ReadBlockUnsafe(source, exact.data(), read_bytes);
+                        if (exact != snap_words) {
+                            if (relaxed_differences++ < 32) {
+                                LOG_WARNING(HW_GPU,
+                                            "DMA snapshot relaxed check: macro {:#x} read of {} "
+                                            "words at {:#x} differs after compute/copy ({:#x} vs "
+                                            "{:#x})",
+                                            macro, words, source, snap_words[0], exact[0]);
+                            }
+                            snap_words = std::move(exact);
+                        }
+                    }
                     if (snapshot_mode == 10) {
                         split.Drain(VideoCommon::DrainSite::MacroDmaRead);
                         flush_if_dirty();
@@ -1948,9 +1976,11 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
                     LOG_INFO(HW_GPU,
                              "DMA snapshot: {} reads skipped the drain, {} drained, {} differed, "
                              "{} reads of listed reports (drained path); misses: {} new page, {} "
-                             "compute/copy, {} unranged, {} noted write",
+                             "compute/copy, {} unranged, {} noted write; relaxed hits {} "
+                             "({} differed)",
                              hits, misses, differences, report_reads, miss_reasons[0],
-                             miss_reasons[1], miss_reasons[2], miss_reasons[3]);
+                             miss_reasons[1], miss_reasons[2], miss_reasons[3], relaxed_hits,
+                             relaxed_differences);
                 }
                 for (u32 i = 0; i < words; ++i) {
                     fs.parameters.push_back(snap_words[i]);

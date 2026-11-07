@@ -290,8 +290,10 @@ public:
     /// whether work sent after position `since` may write device bytes
     /// [begin, begin + size): compute or copies (any range), unranged writers, or a noted write
     /// that overlaps the range. Also true when more writes were noted since than are remembered.
-    [[nodiscard]] bool MayBeWrittenSince(u64 since, u64 begin, u64 size) const {
-        if (last_writer_position > since || last_unranged_position > since) {
+    [[nodiscard]] bool MayBeWrittenSince(u64 since, u64 begin, u64 size,
+                                         bool ignore_compute_copy = false) const {
+        if ((!ignore_compute_copy && last_writer_position > since) ||
+            last_unranged_position > since) {
             return true;
         }
         if (last_memory_writer_position <= since) {
