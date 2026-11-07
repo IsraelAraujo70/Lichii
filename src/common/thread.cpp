@@ -45,6 +45,11 @@
 #ifdef __linux__
 #include <sys/resource.h>
 #include <algorithm>
+#include <cstdlib>
+#include <fstream>
+#include <map>
+#include <utility>
+#include <vector>
 
 namespace {
 constexpr int NICE_AUDIO = -16;
@@ -603,6 +608,74 @@ void PinCurrentThread(PinnedRole role) {
     }
     if (mask != 0) {
         SetThreadAffinityMask(GetCurrentThread(), mask);
+    }
+#elif defined(__linux__) && !defined(__ANDROID__)
+    // Same placement as on Windows, from the kernel's topology: one physical core (both SMT
+    // siblings) each for the split GPU thread's halves, the guest cores on the other cores.
+    static const char* const setting = std::getenv("EDEN_NX2_PIN_THREADS");
+    if (setting != nullptr && setting[0] == '0') {
+        return;
+    }
+    const size_t minimum_cores = setting != nullptr && setting[0] == '1' ? 4U : 6U;
+    // Physical cores the process may run on, as sets of their logical CPUs, ordered by their
+    // lowest CPU. Read by the first caller, before it pins itself.
+    static const std::vector<cpu_set_t> cores = [minimum_cores] {
+        std::vector<cpu_set_t> result;
+        cpu_set_t allowed;
+        CPU_ZERO(&allowed);
+        if (sched_getaffinity(0, sizeof(allowed), &allowed) != 0) {
+            return result;
+        }
+        std::map<std::pair<int, int>, size_t> index;
+        for (int cpu = 0; cpu < CPU_SETSIZE; ++cpu) {
+            if (!CPU_ISSET(cpu, &allowed)) {
+                continue;
+            }
+            const auto read = [cpu](const char* name) {
+                std::ifstream file("/sys/devices/system/cpu/cpu" + std::to_string(cpu) +
+                                   "/topology/" + name);
+                int value = -1;
+                file >> value;
+                return file ? value : -1;
+            };
+            const int package = read("physical_package_id");
+            const int core = read("core_id");
+            if (package < 0 || core < 0) {
+                return std::vector<cpu_set_t>{};
+            }
+            const auto [it, inserted] = index.try_emplace({package, core}, result.size());
+            if (inserted) {
+                CPU_ZERO(&result.emplace_back());
+            }
+            CPU_SET(cpu, &result[it->second]);
+        }
+        LOG_INFO(Common, "Thread pinning: {} physical cores, {}", result.size(),
+                 result.size() >= minimum_cores ? "GPU threads on cores 1 and 2" : "off");
+        return result;
+    }();
+    // Core 0 takes most interrupts: the GPU threads get cores 1 and 2.
+    if (cores.size() < minimum_cores) {
+        return;
+    }
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    switch (role) {
+    case PinnedRole::GpuFront:
+        mask = cores[1];
+        break;
+    case PinnedRole::GpuBack:
+        mask = cores[2];
+        break;
+    case PinnedRole::GuestCore:
+        for (size_t i = 0; i < cores.size(); ++i) {
+            if (i != 1 && i != 2) {
+                CPU_OR(&mask, &mask, &cores[i]);
+            }
+        }
+        break;
+    }
+    if (CPU_COUNT(&mask) != 0 && sched_setaffinity(0, sizeof(mask), &mask) != 0) {
+        LOG_WARNING(Common, "Could not pin thread: {}", ::Common::GetLastErrorMsg());
     }
 #endif
 }
