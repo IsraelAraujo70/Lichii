@@ -122,17 +122,6 @@ inline std::atomic<long long> g_guest_frame_interval_ns{0};
 /// present pacing (nx2_gsv.h) times its frames to whole multiples of it (genlock).
 inline std::atomic<long long> g_host_refresh_ns{0};
 
-/// The refresh period (ns) of the display the render window is on, as the frontend reads it
-/// (SDL3 or Qt), else 0. The host frame pacer uses it where it cannot ask the compositor itself
-/// (everything but Windows): without it the pacer stays off.
-inline std::atomic<long long> g_display_refresh_hint_ns{0};
-
-/// Publishes the render window's display refresh rate in Hz (non-positive: unknown).
-inline void SetDisplayRefreshHz(double hz) {
-    g_display_refresh_hint_ns.store(hz > 1.0 ? static_cast<long long>(1e9 / hz) : 0,
-                                    std::memory_order_relaxed);
-}
-
 /// At 30 FPS and below the host frame pacer presents frames as soon as they are rendered and
 /// publishes how long before the display's next refresh the last one was ready (ns), or -1
 /// while it isn't pacing that way. The game's present pacing (nx2_gsv.h) moves its frames until

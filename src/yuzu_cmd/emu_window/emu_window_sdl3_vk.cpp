@@ -34,7 +34,6 @@ EmuWindow_SDL3_VK::EmuWindow_SDL3_VK(InputCommon::InputSubsystem* input_subsyste
     const SDL_PropertiesID window_props = SDL_GetWindowProperties(render_window);
 
     SetWindowIcon();
-    PublishDisplayRefresh();
 
     if (fullscreen) {
         Fullscreen();

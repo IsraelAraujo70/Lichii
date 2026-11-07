@@ -92,9 +92,6 @@ protected:
     /// Called when user passes the fullscreen parameter flag
     void Fullscreen();
 
-    /// Hands the render window's display refresh rate to the host frame pacer.
-    void PublishDisplayRefresh();
-
     /// Called when a configuration change affects the minimal size of the window
     void OnMinimalClientAreaChangeRequest(std::pair<u32, u32> minimal_size) override;
 

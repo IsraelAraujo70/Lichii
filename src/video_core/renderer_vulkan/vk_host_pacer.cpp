@@ -51,12 +51,6 @@ std::optional<double> QueryRefreshPeriodNs() {
         mode.dmDisplayFrequency > 1) {
         return 1e9 / mode.dmDisplayFrequency;
     }
-#else
-    if (const long long hint =
-            VideoCommon::Nx2Perf::g_display_refresh_hint_ns.load(std::memory_order_relaxed);
-        hint > 0) {
-        return static_cast<double>(hint);
-    }
 #endif
     return std::nullopt;
 }
@@ -83,13 +77,6 @@ void HostPacer::Refresh(Clock::time_point now, bool allowed) {
             refresh_ns = *period;
             refresh_known = true;
         }
-#ifndef _WIN32
-        else if (refresh_known) {
-            LOG_INFO(Render_Vulkan, "Host pacing: display refresh unknown, pacing off");
-            refresh_known = false;
-            vblank.reset();
-        }
-#endif
     }
     pacing = allowed && refresh_known &&
              VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_host_pace,
