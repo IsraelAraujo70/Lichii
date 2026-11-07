@@ -397,6 +397,20 @@ Tegra::Texture::TICEntry GenericEnvironment::ReadTextureInfo(GPUVAddr tic_addr, 
     const GPUVAddr descriptor_addr{tic_addr + index * sizeof(Tegra::Texture::TICEntry)};
     Tegra::Texture::TICEntry entry;
     gpu_memory->ReadBlock(descriptor_addr, &entry, sizeof(entry));
+    if (index > tic_limit && std::getenv("EDEN_NX2_RENDER_TRACE")) {
+        static std::atomic<u32> out_of_pool{};
+        if (out_of_pool.fetch_add(1, std::memory_order_relaxed) < 256) {
+            LOG_WARNING(HW_GPU,
+                        "Out-of-pool shader TIC: program={:#x} start={:#x} stage={} raw={:#x} "
+                        "via_header={} index={} limit={} type={} format={} normalized={} "
+                        "raw={:016x}/{:016x}/{:016x}/{:016x}",
+                        program_base, start_address, static_cast<u32>(stage), raw,
+                        via_header_index, index, tic_limit,
+                        static_cast<u32>(entry.texture_type.Value()),
+                        static_cast<u32>(entry.format.Value()), entry.normalized_coords.Value(),
+                        entry.raw[0], entry.raw[1], entry.raw[2], entry.raw[3]);
+        }
+    }
     if (entry.format.Value() == Tegra::Texture::TextureFormat{} &&
         std::getenv("EDEN_NX2_RENDER_TRACE")) {
         static std::atomic<u32> traces{};
