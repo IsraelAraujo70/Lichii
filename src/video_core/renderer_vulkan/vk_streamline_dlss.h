@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// NVIDIA DLSS (through NVIDIA Streamline) in place of a game's DLSS
-// evaluation. NVIDIA's DLLs come from the user's PC; see vulkan_common/streamline.h.
+// NVIDIA DLSS in place of a game's DLSS evaluation: through NVIDIA Streamline on Windows
+// (vk_streamline_dlss.cpp), through NVIDIA NGX on Linux (vk_ngx_dlss.cpp). NVIDIA's libraries are
+// loaded at run time; see vulkan_common/streamline.h.
 
 #pragma once
 
@@ -11,6 +12,11 @@
 
 #include "common/common_types.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+
+#ifndef _WIN32
+struct NVSDK_NGX_Handle;
+struct NVSDK_NGX_Parameter;
+#endif
 
 namespace Vulkan {
 
@@ -43,7 +49,7 @@ public:
         bool hdr = true; ///< Linear HDR colour. False for tonemapped, perceptually encoded colour.
     };
 
-    /// Throws vk::Exception when Streamline has no DLSS for this device.
+    /// Throws vk::Exception when there is no DLSS for this device.
     explicit StreamlineDlssUpscaler(const Device& device, Scheduler& scheduler,
                                     MemoryAllocator& memory_allocator);
     ~StreamlineDlssUpscaler();
@@ -73,11 +79,16 @@ private:
     const Device& device;
     Scheduler& scheduler;
     MemoryAllocator& memory_allocator;
+#ifdef _WIN32
     void* set_options{}; ///< slDLSSSetOptions
+    u32 frame_index{};
+#else
+    NVSDK_NGX_Parameter* parameters{};
+    NVSDK_NGX_Handle* feature{}; ///< Created for render_extent, upscale_extent and hdr_input
+#endif
     VkExtent2D render_extent{};
     VkExtent2D upscale_extent{};
     bool hdr_input = true;
-    u32 frame_index{};
     vk::Image output_image;
     vk::ImageView output_view;
     vk::Sampler point_sampler;

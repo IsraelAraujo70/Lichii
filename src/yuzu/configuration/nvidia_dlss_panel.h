@@ -6,7 +6,8 @@
 
 #pragma once
 
-#ifdef EGLANTINE_STREAMLINE
+// Windows only: on Linux, NGX loads the files that ship next to the executable.
+#if defined(EGLANTINE_STREAMLINE) && defined(_WIN32)
 
 #include <QWidget>
 

@@ -13,6 +13,9 @@
 #include "video_core/host_shaders/ocarina_dlss_4k_reference_comp_spv.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/renderer_vulkan/vk_streamline_dlss.h"
+/* X11 defines (Linux) */
+#undef Success
+#undef BadValue
 
 #include "video_core/host_shaders/ocarina_camera_motion_comp_spv.h"
 #include "video_core/host_shaders/ocarina_actor_motion_frag_spv.h"

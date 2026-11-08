@@ -536,14 +536,23 @@ if (ANDROID AND ARCHITECTURE_arm64)
     target_link_libraries(video_core PRIVATE adrenotools)
 endif()
 
-# NVIDIA DLSS through NVIDIA Streamline, in place of a game's DLSS (before FSR 3.1) when the
-# setting is on. Only Streamline's MIT-licensed headers are compiled in and nothing of NVIDIA's is
-# linked or copied: sl.interposer.dll and the DLSS plugins are loaded at run time from the user's PC.
-cmake_dependent_option(ENABLE_NVIDIA_DLSS "Enable NVIDIA DLSS through NVIDIA Streamline" ON
-                       "MSVC AND ARCHITECTURE_x86_64" OFF)
+# NVIDIA DLSS in place of a game's DLSS (before FSR 3.1) when the setting is on.
+# Windows: through NVIDIA Streamline. Only Streamline's MIT-licensed headers are compiled in and
+# nothing of NVIDIA's is linked or copied: sl.interposer.dll and the DLSS plugins are loaded at run
+# time from the user's PC.
+# Linux: through NVIDIA NGX (Streamline has no Linux runtime). Only the DLSS SDK's headers are
+# compiled in: its loader (libnvsdk_ngx.a) is wrapped in its own libnvsdk_ngx.so, which video_core
+# loads at run time, and the DLSS model goes next to it. The driver provides libnvidia-ngx.so.1.
+if (ARCHITECTURE_x86_64 AND (MSVC OR (UNIX AND NOT APPLE AND NOT ANDROID)))
+    set(NVIDIA_DLSS_PLATFORM ON)
+endif()
+cmake_dependent_option(ENABLE_NVIDIA_DLSS "Enable NVIDIA DLSS (Streamline on Windows, NGX on Linux)" ON
+                       "NVIDIA_DLSS_PLATFORM" OFF)
 set(EGLANTINE_STREAMLINE_SDK "" CACHE PATH
     "NVIDIA Streamline SDK directory for its headers (empty: download them)")
-if (ENABLE_NVIDIA_DLSS)
+set(EGLANTINE_DLSS_SDK "" CACHE PATH
+    "NVIDIA DLSS SDK directory, Linux only (empty: download the files NGX needs)")
+if (ENABLE_NVIDIA_DLSS AND MSVC)
     if (EGLANTINE_STREAMLINE_SDK)
         set(STREAMLINE_INCLUDE_DIR "${EGLANTINE_STREAMLINE_SDK}/include")
     else()
@@ -561,6 +570,91 @@ if (ENABLE_NVIDIA_DLSS)
     target_link_libraries(video_core PRIVATE version wintrust crypt32)
     target_compile_definitions(video_core PUBLIC EGLANTINE_STREAMLINE)
     message(STATUS "NVIDIA DLSS through Streamline: ${STREAMLINE_INCLUDE_DIR}")
+elseif (ENABLE_NVIDIA_DLSS)
+    set(DLSS_MODEL libnvidia-ngx-dlss.so.310.9.16)
+    set(DLSS_SDK_FILES
+        include/nvsdk_ngx_defs.h
+        include/nvsdk_ngx_defs_vk.h
+        include/nvsdk_ngx_params.h
+        include/nvsdk_ngx_vk.h
+        lib/Linux_x86_64/libnvsdk_ngx.a
+        lib/Linux_x86_64/rel/${DLSS_MODEL}
+    )
+    set(DLSS_SDK_FOUND ON)
+    if (EGLANTINE_DLSS_SDK)
+        set(DLSS_SDK_DIR "${EGLANTINE_DLSS_SDK}")
+    else()
+        # DLSS SDK 310.9.16, file by file: the whole repository carries every Windows build too.
+        set(DLSS_SDK_DIR "${CPM_SOURCE_CACHE}/nvidia_dlss_sdk/310.9.16")
+        set(DLSS_SDK_URL
+            "https://raw.githubusercontent.com/NVIDIA/DLSS/9981c6350dc58c0ce21f024fd65e31e851c31689")
+        set(DLSS_SDK_HASHES
+            ea23f33497cd274860d1c25a97644fce807dcb0037c594547203343103fad03e
+            0a24d0861ace7d6b9362a67b7f08bea1b33ea123c5ce730b19133de8a891d031
+            943bc8cc5cdae03b6303016fbad3183636f2335ae27a2d18776798c3b4efabbc
+            2d364ce7132881eb669e9498fd570d74cba563b1fbebc82c235f8e1ad2dd8b6d
+            d3c50bb0d9624fc35e502a8e929b8fc1e2b505017ebdb84c0d5b627e11a235df
+            30982c937afed85c96b8d313323de9a650a2eec6de1bb0f714b21750f4ce98f6
+        )
+        foreach(file hash IN ZIP_LISTS DLSS_SDK_FILES DLSS_SDK_HASHES)
+            set(path "${DLSS_SDK_DIR}/${file}")
+            if (EXISTS "${path}")
+                file(SHA256 "${path}" existing)
+                if (existing STREQUAL hash)
+                    continue()
+                endif()
+            endif()
+            file(DOWNLOAD "${DLSS_SDK_URL}/${file}" "${path}.part" STATUS status)
+            list(GET status 0 code)
+            if (code EQUAL 0)
+                file(SHA256 "${path}.part" downloaded)
+            endif()
+            if (NOT code EQUAL 0 OR NOT downloaded STREQUAL hash)
+                message(WARNING "Could not download ${file} of the NVIDIA DLSS SDK (${status}); "
+                                "building without NVIDIA DLSS")
+                file(REMOVE "${path}.part")
+                set(DLSS_SDK_FOUND OFF)
+                break()
+            endif()
+            file(RENAME "${path}.part" "${path}")
+        endforeach()
+    endif()
+    foreach(file IN LISTS DLSS_SDK_FILES)
+        if (DLSS_SDK_FOUND AND NOT EXISTS "${DLSS_SDK_DIR}/${file}")
+            message(WARNING "${DLSS_SDK_DIR} has no ${file}; building without NVIDIA DLSS")
+            set(DLSS_SDK_FOUND OFF)
+        endif()
+    endforeach()
+    if (DLSS_SDK_FOUND)
+        # NVIDIA's loader as its own library, next to the executable (vulkan_common/ngx.cpp).
+        set(DLSS_LOADER_SOURCE "${CMAKE_CURRENT_BINARY_DIR}/nvsdk_ngx.cpp")
+        file(WRITE "${DLSS_LOADER_SOURCE}" "")
+        add_library(nvsdk_ngx SHARED "${DLSS_LOADER_SOURCE}")
+        target_compile_options(nvsdk_ngx PRIVATE -fno-lto)
+        target_link_options(nvsdk_ngx PRIVATE -fno-lto)
+        target_link_libraries(nvsdk_ngx PRIVATE
+            "$<LINK_LIBRARY:WHOLE_ARCHIVE,${DLSS_SDK_DIR}/lib/Linux_x86_64/libnvsdk_ngx.a>"
+            ${CMAKE_DL_LIBS})
+        set_target_properties(nvsdk_ngx PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        add_custom_command(TARGET nvsdk_ngx POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DLSS_SDK_DIR}/lib/Linux_x86_64/rel/${DLSS_MODEL}" "$<TARGET_FILE_DIR:nvsdk_ngx>"
+            VERBATIM)
+        add_dependencies(video_core nvsdk_ngx)
+
+        target_sources(video_core PRIVATE
+            renderer_vulkan/vk_ngx_dlss.cpp
+            renderer_vulkan/vk_streamline_dlss.h
+            vulkan_common/ngx.cpp
+            vulkan_common/ngx_api.h
+            vulkan_common/streamline.h
+        )
+        target_include_directories(video_core SYSTEM PRIVATE "${DLSS_SDK_DIR}/include")
+        target_link_libraries(video_core PRIVATE ${CMAKE_DL_LIBS})
+        target_compile_definitions(video_core PUBLIC EGLANTINE_STREAMLINE)
+        message(STATUS "NVIDIA DLSS through NGX: ${DLSS_SDK_DIR}")
+    endif()
 endif()
 
 create_target_directory_groups(video_core)

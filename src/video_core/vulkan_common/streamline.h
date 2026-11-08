@@ -1,9 +1,10 @@
 // SPDX-FileCopyrightText: Copyright 2026 Eden Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// NVIDIA DLSS through NVIDIA Streamline. Only Streamline's MIT-licensed
-// headers are built in: NVIDIA's DLLs are loaded at run time from the user's PC, and none ship
-// with the emulator.
+// NVIDIA DLSS through NVIDIA Streamline on Windows (streamline.cpp). Only Streamline's
+// MIT-licensed headers are built in: NVIDIA's DLLs are loaded at run time from the user's PC, and
+// none ship with the emulator. Linux has no Streamline runtime: ngx.cpp implements the same
+// interface with NVIDIA NGX, loading the DLSS SDK's loader (libnvsdk_ngx.so) at run time.
 
 #pragma once
 
@@ -16,6 +17,7 @@
 
 namespace Vulkan::Streamline {
 
+#ifdef _WIN32
 /// NVIDIA's files DLSS needs, as found on this PC. Paths are empty when missing.
 struct DlssFiles {
     std::filesystem::path folder;     ///< Where the loader is, or where it should go
@@ -37,6 +39,7 @@ struct DlssFiles {
 
 /// A valid Authenticode signature from NVIDIA Corporation (DLSS models).
 [[nodiscard]] bool IsSignedByNvidia(const std::filesystem::path& path);
+#endif
 
 /// When the NVIDIA DLSS setting is on, loads the user's sl.interposer.dll (checking NVIDIA's
 /// signature) and starts Streamline for DLSS. Call before creating the renderer's instance.
