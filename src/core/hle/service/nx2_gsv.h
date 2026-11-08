@@ -2265,10 +2265,29 @@ private:
             const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_EVERY");
             return value != nullptr ? (std::max)(u64{1}, static_cast<u64>(std::strtoull(value, nullptr, 10))) : u64{120};
         }();
-        if (directory == nullptr || (m_presents % every) != 1 % every || m_capture_pending->exchange(true)) {
+        // EDEN_NX2_FRAME_CAPTURE_FROM=<present>: no captures before that present (skips menus
+        // and loading, where full-resolution captures only slow the run down).
+        static const u64 from = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_FROM");
+            return value != nullptr ? static_cast<u64>(std::strtoull(value, nullptr, 10)) : u64{0};
+        }();
+        if (directory == nullptr || m_presents < from || (m_presents % every) != 1 % every ||
+            m_capture_pending->exchange(true)) {
             return;
         }
-        const auto layout = Layout::DefaultFrameLayout(1280, 720);
+        // EDEN_NX2_FRAME_CAPTURE_SIZE=<w>x<h> (default 1280x720): capture size, e.g. 1920x1080
+        // for full-resolution visual regression captures at 1080p internal resolution.
+        static const std::pair<u32, u32> size = [] {
+            unsigned width = 1280, height = 720;
+            if (const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_SIZE")) {
+                if (std::sscanf(value, "%ux%u", &width, &height) != 2 || width == 0 || height == 0) {
+                    width = 1280;
+                    height = 720;
+                }
+            }
+            return std::pair<u32, u32>{width, height};
+        }();
+        const auto layout = Layout::DefaultFrameLayout(size.first, size.second);
         auto pixels = std::make_shared<std::vector<u8>>(layout.width * layout.height * 4);
         const std::string path =
             fmt::format("{}/nx2-frame-{:05}.tga", directory, m_presents);

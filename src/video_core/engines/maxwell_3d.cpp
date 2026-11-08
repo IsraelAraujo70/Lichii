@@ -339,6 +339,9 @@ u32 Maxwell3D::ProcessShadowRam(u32 method, u32 argument) {
 }
 
 void Maxwell3D::ConsumeSinkImpl(Core::System& system) {
+    if (front_macros && !VideoCommon::GpuSplit::OnBackThread()) {
+        ReleaseFront();
+    }
     const auto control = shadow_state.shadow_ram_control;
     // Sunk methods are state writes only (not in execution_mask): skip unchanged values, as
     // CallMethod does.
@@ -509,6 +512,9 @@ void Maxwell3D::TraceFirstMethodWrite(u32 method, u32 argument) {
 }
 
 void Maxwell3D::CallMethod(Core::System& system, u32 method, u32 method_argument, bool is_last_call) {
+    if (front_macros && !VideoCommon::GpuSplit::OnBackThread()) {
+        ReleaseFront();
+    }
     if (!fast_maxwell3d || executing_macro != 0 || method >= MacroRegistersStart ||
         method == MAXWELL3D_REG_INDEX(shadow_ram_control)) {
         return CallMethodSlow(system, method, method_argument, is_last_call);
@@ -741,6 +747,9 @@ void Maxwell3D::DumpRecentWrites(u32 method) {
 }
 
 void Maxwell3D::CallMultiMethod(Core::System& system, u32 method, const u32* base_start, u32 amount, u32 methods_pending) {
+    if (front_macros && !VideoCommon::GpuSplit::OnBackThread()) {
+        ReleaseFront();
+    }
     RecordWrite(method, amount ? base_start[0] : 0, amount, methods_pending);
     // Methods after 0xE00 are special, they're actually triggers for some microcode that was
     // uploaded to the GPU during initialization.
@@ -1207,6 +1216,19 @@ Maxwell3D::FrontState& Maxwell3D::Front(Core::System& system, VideoCommon::GpuSp
         front_macros = true;
     }
     return *front;
+}
+
+// With the split on, engine methods run on its back only: one here on another thread means the
+// split stopped (accuracy settings changed mid-game). Hand the macros back: the front's copy
+// goes stale from now on, and a restart copies the registers again (Front).
+void Maxwell3D::ReleaseFront() {
+    executing_macro = front->executing_macro;
+    macro_params = std::move(front->parameters);
+    std::memcpy(shadow_state.reg_array.data(), front->shadow.data(), sizeof(front->shadow));
+    shadow_state.shadow_ram_control = front->control;
+    front.reset();
+    front_macros = false;
+    LOG_INFO(HW_GPU, "GPU thread split stopped: 3D macros back on the engine");
 }
 
 void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 method,
@@ -1832,7 +1854,11 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     // read now flushes its whole device pages and remembers the split position; later reads of
     // those pages skip the drain while nothing sent since may write them
     // (GpuSplit::MayBeWrittenSince) and the query cache lists no report there. 10 also drains,
-    // reads again and logs differences.
+    // reads again and logs differences. 11 (opt-in) keeps snapshots across compute and copy work,
+    // which ended ~77% of them in Ocarina's forest. It is unsound in general: a compute dispatch or
+    // copy queued after the snapshot may write the page (indirect draw arguments from a culling
+    // pass, a copied query result), and the read then returns the old value. 12 is 11 that also
+    // drains, re-reads and counts the reads only 11 let through that differ.
     const int snapshot_mode =
         VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_dma_snapshot, "EDEN_NX2_DMA_SNAPSHOT",
                                          9);
@@ -1853,13 +1879,21 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
             static u64 differences{};
             static u64 report_reads{};
             static std::array<u64, 4> miss_reasons{};
+            static u64 relaxed_hits{};
+            static u64 relaxed_differences{};
             const u64 first_page = *device >> 12;
             const u64 last_page = (*device + read_bytes - 1) >> 12;
+            // 11/12: compute and copy work does not end a snapshot (see the mode comment above).
+            const bool relaxed = snapshot_mode >= 11;
             bool hit = true;
+            bool relaxed_only = false;
             for (u64 page = first_page; page <= last_page && hit; ++page) {
                 const auto it = fs.dma_snapshots.find(page);
                 hit = it != fs.dma_snapshots.end() &&
-                      !split.MayBeWrittenSince(it->second, *device, read_bytes);
+                      !split.MayBeWrittenSince(it->second, *device, read_bytes, relaxed);
+                if (hit && relaxed && split.MayBeWrittenSince(it->second, *device, read_bytes)) {
+                    relaxed_only = true;
+                }
                 if (!hit) {
                     // No snapshot, compute/copy sent since, unranged writer sent since, noted write.
                     const u32 reason = it == fs.dma_snapshots.end()                   ? 0
@@ -1876,7 +1910,25 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
                 snap_words.resize(words);
                 if (hit) {
                     ++hits;
+                    relaxed_hits += relaxed_only ? 1 : 0;
                     memory_manager.ReadBlockUnsafe(source, snap_words.data(), read_bytes);
+                    if (snapshot_mode == 12 && relaxed_only) {
+                        split.Drain(VideoCommon::DrainSite::MacroDmaRead);
+                        flush_if_dirty();
+                        flush_queries(source, read_bytes);
+                        std::vector<u32> exact(words);
+                        memory_manager.ReadBlockUnsafe(source, exact.data(), read_bytes);
+                        if (exact != snap_words) {
+                            if (relaxed_differences++ < 32) {
+                                LOG_WARNING(HW_GPU,
+                                            "DMA snapshot relaxed check: macro {:#x} read of {} "
+                                            "words at {:#x} differs after compute/copy ({:#x} vs "
+                                            "{:#x})",
+                                            macro, words, source, snap_words[0], exact[0]);
+                            }
+                            snap_words = std::move(exact);
+                        }
+                    }
                     if (snapshot_mode == 10) {
                         split.Drain(VideoCommon::DrainSite::MacroDmaRead);
                         flush_if_dirty();
@@ -1926,9 +1978,11 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
                     LOG_INFO(HW_GPU,
                              "DMA snapshot: {} reads skipped the drain, {} drained, {} differed, "
                              "{} reads of listed reports (drained path); misses: {} new page, {} "
-                             "compute/copy, {} unranged, {} noted write",
+                             "compute/copy, {} unranged, {} noted write; relaxed hits {} "
+                             "({} differed)",
                              hits, misses, differences, report_reads, miss_reasons[0],
-                             miss_reasons[1], miss_reasons[2], miss_reasons[3]);
+                             miss_reasons[1], miss_reasons[2], miss_reasons[3], relaxed_hits,
+                             relaxed_differences);
                 }
                 for (u32 i = 0; i < words; ++i) {
                     fs.parameters.push_back(snap_words[i]);
@@ -1968,13 +2022,13 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
         split.Drain(VideoCommon::DrainSite::MacroDmaCheck);
         flush_if_dirty();
     }
-    // Reports and semaphore writes held in the query cache are written out (and waited on
-    // through the fence manager) on the thread that owns it: without this, macro DMA reads of
-    // occlusion reports return stale counts and the guest culls visible objects. The non-split
-    // path in macro.cpp has the matching flush.
+    // Reports and semaphore writes held in the query cache are written out on the thread that
+    // owns it, waiting for pending host results (QueryDma::FlushPending): without this, macro DMA
+    // reads of occlusion reports return stale counts, so the guest culls visible objects or the
+    // scene flashes overexposed when the camera moves. The non-split path in macro.cpp matches.
     split.Run(
-        [memory = &memory_manager, source, read_bytes] {
-            memory->FlushRegion(source, read_bytes, VideoCommon::CacheType::QueryCache);
+        [this, source, read_bytes] {
+            VideoCommon::QueryDma::FlushPending(memory_manager, *rasterizer, source, read_bytes);
         },
         VideoCommon::DrainSite::MacroDmaFlush);
     u32 changed{};
