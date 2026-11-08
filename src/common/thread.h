@@ -113,7 +113,9 @@ void SetCurrentThreadToPerformanceCores();
 /// physical core each for the split GPU thread's halves and
 /// the guest cores kept off them, so an SMT sibling never shares the GPU threads' core.
 enum class PinnedRole : u32 { GpuFront, GpuBack, GuestCore };
-void PinCurrentThread(PinnedRole role);
+/// Pins the calling thread for its role. guest_core is the emulated core index of a GuestCore
+/// thread (EDEN_NX2_PIN_SOLO on Linux), -1 otherwise.
+void PinCurrentThread(PinnedRole role, int guest_core = -1);
 void SetCurrentThreadToEfficiencyCores();
 void SetCurrentThreadToBackgroundWork();
 void SetCurrentThreadToAllCores();

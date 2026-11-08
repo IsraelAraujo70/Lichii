@@ -556,7 +556,7 @@ void SetCurrentThreadToPerformanceCores() {
 #endif
 }
 
-void PinCurrentThread(PinnedRole role) {
+void PinCurrentThread(PinnedRole role, [[maybe_unused]] int guest_core) {
 #ifdef _WIN32
     // Off with EDEN_NX2_PIN_THREADS=0. On by default with 6 or more physical cores: the split's
     // back did about 8% more draws a second at Lake Hylia (Ryzen 7 7800X3D), its worst window
@@ -666,13 +666,40 @@ void PinCurrentThread(PinnedRole role) {
     case PinnedRole::GpuBack:
         mask = cores[2];
         break;
-    case PinnedRole::GuestCore:
+    case PinnedRole::GuestCore: {
+        // EDEN_NX2_PIN_SOLO="4,5": those guest cores get a physical core each, in list order, from
+        // the cores the GPU threads leave; the other guest cores share what remains. In Ocarina of
+        // Time guest cores 4 and 5 run the game's busiest threads, and sharing a core with an SMT
+        // sibling slowed them.
+        static const std::vector<int> solo = [] {
+            std::vector<int> result;
+            if (const char* list = std::getenv("EDEN_NX2_PIN_SOLO")) {
+                for (const char* c = list; *c != 0; ++c) {
+                    if (*c >= '0' && *c <= '9') {
+                        result.push_back(*c - '0');
+                    }
+                }
+            }
+            return result;
+        }();
+        std::vector<size_t> pool;
         for (size_t i = 0; i < cores.size(); ++i) {
             if (i != 1 && i != 2) {
-                CPU_OR(&mask, &mask, &cores[i]);
+                pool.push_back(i);
             }
         }
+        // Keep at least one shared core for the other guest cores.
+        const size_t solo_count = (std::min)(solo.size(), pool.empty() ? 0 : pool.size() - 1);
+        const auto position = std::find(solo.begin(), solo.begin() + solo_count, guest_core);
+        if (guest_core >= 0 && position != solo.begin() + solo_count) {
+            mask = cores[pool[pool.size() - solo_count + (position - solo.begin())]];
+            break;
+        }
+        for (size_t i = 0; i + solo_count < pool.size(); ++i) {
+            CPU_OR(&mask, &mask, &cores[pool[i]]);
+        }
         break;
+    }
     }
     if (CPU_COUNT(&mask) != 0 && sched_setaffinity(0, sizeof(mask), &mask) != 0) {
         LOG_WARNING(Common, "Could not pin thread: {}", ::Common::GetLastErrorMsg());
