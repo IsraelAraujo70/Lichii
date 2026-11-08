@@ -1854,12 +1854,12 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     // read now flushes its whole device pages and remembers the split position; later reads of
     // those pages skip the drain while nothing sent since may write them
     // (GpuSplit::MayBeWrittenSince) and the query cache lists no report there. 10 also drains,
-    // reads again and logs differences. 11 (experiment) keeps snapshots across compute and copy
+    // reads again and logs differences. 11 (the default) keeps snapshots across compute and copy
     // work, which ended ~77% of them in Ocarina's forest; 12 is 11 that also drains, re-reads and
     // counts the reads only 11 let through that differ.
     const int snapshot_mode =
         VideoCore::Nx2Debug::SwitchValue(VideoCore::Nx2Debug::g_dma_snapshot, "EDEN_NX2_DMA_SNAPSHOT",
-                                         9);
+                                         11);
     const auto flush_queries = [&](GPUVAddr begin, size_t bytes) {
         split.Run(
             [memory = &memory_manager, begin, bytes] {
