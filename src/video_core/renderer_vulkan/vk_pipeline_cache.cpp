@@ -96,6 +96,11 @@
 
 #ifdef __ANDROID__
 #include "../../android/app/src/main/jni/android_settings.h"
+
+// Xlib.h (through the Vulkan headers on Linux) defines Status as int.
+#ifdef Status
+#undef Status
+#endif
 #endif
 
 namespace Vulkan {
