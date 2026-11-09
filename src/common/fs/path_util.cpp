@@ -345,6 +345,18 @@ fs::path GetAppDataRoamingDirectory() {
 
 #else
 
+fs::path GetExeDirectory() {
+    // The shader recipes ship in a folder beside the executable (nx2_precompile.cpp).
+    std::error_code error;
+    const fs::path exe = fs::read_symlink("/proc/self/exe", error);
+    if (error) {
+        LOG_ERROR(Common_Filesystem,
+                  "Failed to get the path to the executable of the current process");
+        return {};
+    }
+    return exe.parent_path();
+}
+
 fs::path GetHomeDirectory() {
     const char* home_env_var = getenv("HOME");
 
